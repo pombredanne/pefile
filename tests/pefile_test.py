@@ -1,5 +1,6 @@
-#!/usr/bin/python
 # -*- coding: utf-8 -*-
+from __future__ import print_function
+from builtins import range
 
 import os
 import difflib
@@ -41,26 +42,26 @@ class Test_pefile(unittest.TestCase):
                 pe = pefile.PE(pe_filename)
                 pe_file_data = pe.dump_info()
                 pe_file_data = pe_file_data.replace('\n\r', '\n')
-            except Exception, excp:
-                print 'Failed processing [%s]' % os.path.basename(pe_filename)
+            except Exception as excp:
+                print('Failed processing [%s]' % os.path.basename(pe_filename))
                 raise
 
             control_data_filename = '%s.dmp' % pe_filename
 
             if not os.path.exists(control_data_filename):
-                print (
+                print((
                     'Could not find control data file [%s]. '
                     'Assuming first run and generating...') % (
-                    os.path.basename(control_data_filename) )
-                control_data_f = file( control_data_filename, 'wb')
+                    os.path.basename(control_data_filename) ))
+                control_data_f = open( control_data_filename, 'wb')
                 control_data_f.write( pe_file_data )
                 continue
 
-            control_data_f = file( control_data_filename, 'rb')
+            control_data_f = open(control_data_filename, 'rb')
             control_data = control_data_f.read()
             control_data_f.close()
 
-            pe_file_data_hash = sha256(pe_file_data).hexdigest()
+            pe_file_data_hash = sha256(pe_file_data.encode('ascii')).hexdigest()
             control_data_hash = sha256(control_data).hexdigest()
 
             diff_lines_added_count = 0
@@ -68,10 +69,10 @@ class Test_pefile(unittest.TestCase):
             lines_to_ignore = 0
 
             if control_data_hash != pe_file_data_hash:
-                print 'Hash differs for [%s]' % os.path.basename(pe_filename)
+                print('Hash differs for [%s]' % os.path.basename(pe_filename))
 
                 diff = difflib.ndiff(
-                    control_data.splitlines(), pe_file_data.splitlines())
+                    control_data.decode('ascii').splitlines(), pe_file_data.splitlines())
 
                 # check the diff
                 for line in diff:
@@ -108,23 +109,23 @@ class Test_pefile(unittest.TestCase):
 
                     # Do the diff again to store it for analysis.
                     diff = difflib.unified_diff(
-                        control_data.splitlines(), pe_file_data.splitlines())
-                    error_diff_f = file('error_diff.txt', 'ab')
+                        control_data.decode('ascii').splitlines(), pe_file_data.splitlines())
+                    error_diff_f = open('error_diff.txt', 'ab')
                     error_diff_f.write(
-                        '\n________________________________________\n')
+                        b'\n________________________________________\n')
                     error_diff_f.write(
-                        'Errors for file "%s":\n' % pe_filename)
+                        'Errors for file "{0}":\n'.format(pe_filename).encode('ascii'))
                     error_diff_f.write(
-                        '\n'.join([l for l in diff if not l.startswith(' ')]))
+                        '\n'.join([l for l in diff if not l.startswith(' ')]).encode('ascii'))
                     error_diff_f.close()
-                    print 'Diff saved to: error_diff.txt'
+                    print('Diff saved to: error_diff.txt')
 
             if diff_lines_removed_count == 0:
                 try:
-                    self.assertEqual( control_data, pe_file_data )
+                    self.assertEqual( control_data.decode('ascii'), pe_file_data )
                 except AssertionError:
                     diff = difflib.unified_diff(
-                        control_data.splitlines(), pe_file_data.splitlines())
+                        control_data.decode('ascii').splitlines(), pe_file_data.splitlines())
                     raise AssertionError( '\n'.join(diff) )
 
             os.sys.stdout.write('[%d]' % ( len(self.test_files) - idx ))
@@ -139,7 +140,7 @@ class Test_pefile(unittest.TestCase):
         control_file = os.path.join( REGRESSION_TESTS_DIR, 'MSVBVM60.DLL')
         pe = pefile.PE(control_file, fast_load=True)
         # Load the 16 directories.
-        pe.parse_data_directories( directories= range(0x10) )
+        pe.parse_data_directories( directories= list(range(0x10)) )
 
         # Do it all at once.
         pe_full = pefile.PE(control_file, fast_load=False)
@@ -160,13 +161,13 @@ class Test_pefile(unittest.TestCase):
 
         original_data = pe.write()
 
-        str1 = 'string1'
-        str2 = 'str2'
-        str3 = 'string3'
+        str1 = b'string1'
+        str2 = b'str2'
+        str3 = b'string3'
 
-        pe.FileInfo[0].StringTable[0].entries['FileDescription'] = str1
-        pe.FileInfo[0].StringTable[0].entries['FileVersion'] = str2
-        pe.FileInfo[0].StringTable[0].entries['InternalName'] = str3
+        pe.FileInfo[0].StringTable[0].entries[b'FileDescription'] = str1
+        pe.FileInfo[0].StringTable[0].entries[b'FileVersion'] = str2
+        pe.FileInfo[0].StringTable[0].entries[b'InternalName'] = str3
 
         new_data = pe.write()
 
@@ -177,12 +178,12 @@ class Test_pefile(unittest.TestCase):
                 diff += 1
                 # Skip the zeroes that pefile automatically adds to pad a new,
                 # shorter string, into the space occupied by a longer one.
-                if new_data[idx] != '\0':
-                    differences.append(new_data[idx])
+                if new_data[idx] != 0:
+                    differences.append(chr(new_data[idx]))
 
         # Verify all modifications in the file were the ones we just made
         #
-        self.assertEqual( ''.join(differences),  str1+str2+str3 )
+        self.assertEqual(''.join(differences).encode('ascii'),  str1+str2+str3)
 
 
     def test_nt_headers_exception(self):
@@ -194,7 +195,7 @@ class Test_pefile(unittest.TestCase):
 
         # Truncate it at the PE header and add invalid data.
         pe_header_offest = pe.DOS_HEADER.e_lfanew
-        corrupted_data = pe.__data__[:pe_header_offest] + '\0' * (1024*10)
+        corrupted_data = pe.__data__[:pe_header_offest] + b'\0' * (1024*10)
 
         self.assertRaises(pefile.PEFormatError, pefile.PE, data=corrupted_data)
 
@@ -205,7 +206,7 @@ class Test_pefile(unittest.TestCase):
         """
 
         # Generate 10KiB of zeroes
-        data = '\0' * (1024*10)
+        data = b'\0' * (1024*10)
 
         # Attempt to parse data and verify PE header, a PEFormatError exception
         # is thrown.
@@ -218,7 +219,7 @@ class Test_pefile(unittest.TestCase):
         """
 
         # Generate 64 bytes of zeroes
-        data = '\0' * (64)
+        data = b'\0' * (64)
 
         # Attempt to parse data and verify PE header a PEFormatError exception
         # is thrown.
@@ -285,7 +286,7 @@ class Test_pefile(unittest.TestCase):
             pe.OPTIONAL_HEADER.AddressOfEntryPoint, 10)
 
         # this is the correct EP data
-        good_ep_data = '\x55\x8b\xec\x83\xec\x70\x83\x65\xcc\x00'
+        good_ep_data = b'\x55\x8b\xec\x83\xec\x70\x83\x65\xcc\x00'
 
         self.assertEqual( entry_point_data, good_ep_data )
 
@@ -306,11 +307,15 @@ class Test_pefile(unittest.TestCase):
             pe.OPTIONAL_HEADER.AddressOfEntryPoint, 32)
 
         # this is the correct EP data
-        good_ep_data = (
-            '\xb8\x00\x04@\x00\xff\xd0j\x00\xe8\x00\x00\x00\x00\xff%\x00\x02'
-            '@\x00D\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+        good_ep_data = [
+            0xb8, 0x00, 0x04, 0x40, 0x00, 0xff, 0xd0, 0x6a, 0x00, 0xe8, 0x00,
+            0x00, 0x00, 0x00, 0xff, 0x25, 0x00, 0x02, 0x40, 0x00, 0x44, 0x02,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
 
-        self.assertEqual(entry_point_data, good_ep_data)
+        if isinstance(entry_point_data[0], int):
+            self.assertEqual([i for i in entry_point_data], good_ep_data)
+        else:
+            self.assertEqual([ord(i) for i in entry_point_data], good_ep_data)
 
 
     def test_entry_point_retrieval_with_unusual_PointerToRawData_values(self):
@@ -327,10 +332,15 @@ class Test_pefile(unittest.TestCase):
             pe.OPTIONAL_HEADER.AddressOfEntryPoint, 32)
 
         # this is the correct EP data
-        good_ep_data = (
-            'bee0114000ff36e9c300000048010f010b014b45524e454c33322e444c4c0000')
+        good_ep_data = [
+            0xbe, 0xe0, 0x11, 0x40, 0x00, 0xff, 0x36, 0xe9, 0xc3, 0x00, 0x00,
+            0x00, 0x48, 0x01, 0x0f, 0x01, 0x0b, 0x01, 0x4b, 0x45, 0x52, 0x4e,
+            0x45, 0x4c, 0x33, 0x32, 0x2e, 0x44, 0x4c, 0x4c, 0x00, 0x00]
 
-        self.assertEqual( entry_point_data.encode('hex'), good_ep_data )
+        if isinstance(entry_point_data[0], int):
+            self.assertEqual([i for i in entry_point_data], good_ep_data)
+        else:
+            self.assertEqual([ord(i) for i in entry_point_data], good_ep_data)
 
 
     def test_VS_VERSIONINFO_dword_aligment(self):
@@ -362,7 +372,7 @@ class Test_pefile(unittest.TestCase):
         trimmed_data = pe.trim()
 
         # Ensure the overlay data is correct.
-        self.assertEqual( overlay_data, ("A"*186) + '\n' )
+        self.assertEqual( overlay_data, bytes( b'A'*186 + b'\n') )
 
         # Ensure the trim offset is correct.
         self.assertEqual( pe.get_overlay_data_start_offset(), 294912 )
@@ -405,7 +415,7 @@ class Test_pefile(unittest.TestCase):
         control_file = os.path.join(
             REGRESSION_TESTS_DIR,
             'pefile_unittest_data__resurrel_malware_rebased_0x400000')
-        control_file_f = file(control_file, 'rb')
+        control_file_f = open(control_file, 'rb')
         control_file_data = control_file_f.read()
         control_file_f.close()
 
