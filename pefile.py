@@ -2315,7 +2315,9 @@ class PE(object):
 
 
 
-    def parse_data_directories(self, directories=None):
+    def parse_data_directories(self, directories=None,
+                               forwarded_exports_only=False,
+                               import_dllnames_only=False):
         """Parse and process the PE file's data directories.
 
         If the optional argument 'directories' is given, only
@@ -2335,6 +2337,13 @@ class PE(object):
 
         If 'directories' is a list, the ones that are processed will be removed,
         leaving only the ones that are not present in the image.
+
+        If `forwarded_exports_only` is True, the IMAGE_DIRECTORY_ENTRY_EXPORT
+        attribute will only contain exports that are forwarded to another DLL.
+
+        If `import_dllnames_only` is True, symbols will not be parsed from
+        the import table and the entries in the IMAGE_DIRECTORY_ENTRY_IMPORT
+        attribute will not have a `symbols` attribute.
         """
 
         directory_parsing = (
@@ -2367,7 +2376,13 @@ class PE(object):
             if directories is None or directory_index in directories:
 
                 if dir_entry.VirtualAddress:
-                    value = entry[1](dir_entry.VirtualAddress, dir_entry.Size)
+                    if forwarded_exports_only and entry[0] == 'IMAGE_DIRECTORY_ENTRY_EXPORT':
+                        value = entry[1](dir_entry.VirtualAddress, dir_entry.Size, forwarded_only=True)
+                    elif import_dllnames_only and entry[0] == 'IMAGE_DIRECTORY_ENTRY_IMPORT':
+                        value = entry[1](dir_entry.VirtualAddress, dir_entry.Size, dllnames_only=True)
+
+                    else:
+                        value = entry[1](dir_entry.VirtualAddress, dir_entry.Size)
                     if value:
                         setattr(self, entry[0][6:], value)
 
@@ -3097,7 +3112,7 @@ class PE(object):
                 versioninfo_string = self.get_string_u_at_rva(ustr_offset)
             else:
                 versioninfo_string = self.get_string_u_at_rva(
-                    ustr_offset, section_end - ustr_offset)
+                    ustr_offset, (section_end - ustr_offset) >> 1)
         except PEFormatError as excp:
             self.__warnings.append(
                 'Error parsing the version information, '
@@ -3107,7 +3122,7 @@ class PE(object):
 
 
         # If the structure does not contain the expected name, it's assumed to be invalid
-        if versioninfo_string != b'VS_VERSION_INFO':
+        if versioninfo_string is not None and versioninfo_string != b'VS_VERSION_INFO':
             if isinstance(versioninfo_string, bytes):
                 versioninfo_string = versioninfo_string.decode('utf-8', 'backslashreplace')
             else:
@@ -3126,7 +3141,8 @@ class PE(object):
         # The the Key attribute to point to the unicode string identifying the structure
         self.VS_VERSIONINFO.Key = versioninfo_string
 
-
+        if versioninfo_string is None:
+            versioninfo_string = ''
         # Process the fixed version information, get the offset and structure
         fixedfileinfo_offset = self.dword_align(
             versioninfo_struct.sizeof() + 2 * (len(versioninfo_string) + 1),
@@ -3369,8 +3385,7 @@ class PE(object):
                 break
 
 
-
-    def parse_export_directory(self, rva, size):
+    def parse_export_directory(self, rva, size, forwarded_only=False):
         """Parse the export directory.
 
         Given the RVA of the export directory, it will process all
@@ -3425,27 +3440,9 @@ class PE(object):
             safety_boundary = section.VirtualAddress + len(section.get_data()) - export_dir.AddressOfNames
 
         for i in range( min( export_dir.NumberOfNames, old_div(safety_boundary,4)) ):
-            symbol_name_address = self.get_dword_from_data(address_of_names, i)
-
-            if symbol_name_address is None:
-                max_failed_entries_before_giving_up -= 1
-                if max_failed_entries_before_giving_up <= 0:
-                    break
-
-            symbol_name = self.get_string_at_rva( symbol_name_address )
-            if not is_valid_function_name(symbol_name):
-                break
-            try:
-                symbol_name_offset = self.get_offset_from_rva( symbol_name_address )
-            except PEFormatError:
-                max_failed_entries_before_giving_up -= 1
-                if max_failed_entries_before_giving_up <= 0:
-                    break
-                continue
 
             symbol_ordinal = self.get_word_from_data(
                 address_of_name_ordinals, i)
-
 
             if symbol_ordinal is not None and symbol_ordinal*4 < len(address_of_functions):
                 symbol_address = self.get_dword_from_data(
@@ -3469,8 +3466,28 @@ class PE(object):
                 except PEFormatError:
                     continue
             else:
+                if forwarded_only:
+                    continue
                 forwarder_str = None
                 forwarder_offset = None
+
+            symbol_name_address = self.get_dword_from_data(address_of_names, i)
+
+            if symbol_name_address is None:
+                max_failed_entries_before_giving_up -= 1
+                if max_failed_entries_before_giving_up <= 0:
+                    break
+
+            symbol_name = self.get_string_at_rva( symbol_name_address )
+            if not is_valid_function_name(symbol_name):
+                break
+            try:
+                symbol_name_offset = self.get_offset_from_rva( symbol_name_address )
+            except PEFormatError:
+                max_failed_entries_before_giving_up -= 1
+                if max_failed_entries_before_giving_up <= 0:
+                    break
+                continue
 
             exports.append(
                 ExportData(
@@ -3621,7 +3638,10 @@ class PE(object):
         if not hasattr(self, "DIRECTORY_ENTRY_IMPORT"):
             return ""
         for entry in self.DIRECTORY_ENTRY_IMPORT:
-            libname = entry.dll.lower()
+            if isinstance(entry.dll, bytes):
+                libname = entry.dll.decode().lower()
+            else:
+                libname = entry.dll.lower()
             parts = libname.rsplit('.', 1)
             if len(parts) > 1 and parts[1] in exts:
                 libname = parts[0]
@@ -3638,12 +3658,14 @@ class PE(object):
                 if not funcname:
                     continue
 
+                if isinstance(funcname, bytes):
+                    funcname = funcname.decode()
                 impstrs.append('%s.%s' % (libname.lower(),funcname.lower()))
 
-        return md5( ','.join( impstrs ) ).hexdigest()
+        return md5( ','.join( impstrs ).encode() ).hexdigest()
 
 
-    def parse_import_directory(self, rva, size):
+    def parse_import_directory(self, rva, size, dllnames_only=False):
         """Walk and parse the import directory."""
 
         import_descs =  []
@@ -3677,27 +3699,28 @@ class PE(object):
                 max_len = max(rva-import_desc.OriginalFirstThunk, rva-import_desc.FirstThunk)
 
             import_data = []
-            try:
-                import_data =  self.parse_imports(
-                    import_desc.OriginalFirstThunk,
-                    import_desc.FirstThunk,
-                    import_desc.ForwarderChain,
-                    max_length = max_len)
-            except PEFormatError as e:
-                self.__warnings.append(
-                    'Error parsing the import directory. '
-                    'Invalid Import data at RVA: 0x{0:x} ({1})'.format(
-                        rva, e.value))
+            if not dllnames_only:
+                try:
+                    import_data =  self.parse_imports(
+                        import_desc.OriginalFirstThunk,
+                        import_desc.FirstThunk,
+                        import_desc.ForwarderChain,
+                        max_length = max_len)
+                except PEFormatError as e:
+                    self.__warnings.append(
+                        'Error parsing the import directory. '
+                        'Invalid Import data at RVA: 0x{0:x} ({1})'.format(
+                            rva, e.value))
 
-            if error_count > 5:
-                self.__warnings.append(
-                    'Too may errors parsing the import directory. '
-                    'Invalid import data at RVA: 0x{0:x}'.format(rva) )
-                break
+                if error_count > 5:
+                    self.__warnings.append(
+                        'Too may errors parsing the import directory. '
+                        'Invalid import data at RVA: 0x{0:x}'.format(rva) )
+                    break
 
-            if not import_data:
-                error_count += 1
-                continue
+                if not import_data:
+                    error_count += 1
+                    continue
 
             dll = self.get_string_at_rva(import_desc.Name)
             if not is_valid_dos_filename(dll):
@@ -3715,19 +3738,20 @@ class PE(object):
                         imports = import_data,
                         dll = dll))
 
-        suspicious_imports = set([ b'LoadLibrary', b'GetProcAddress' ])
-        suspicious_imports_count = 0
-        total_symbols = 0
-        for imp_dll in import_descs:
-            for symbol in imp_dll.imports:
-                for suspicious_symbol in suspicious_imports:
-                    if symbol and symbol.name and symbol.name.startswith( suspicious_symbol ):
-                        suspicious_imports_count += 1
-                        break
-                total_symbols += 1
-        if suspicious_imports_count == len(suspicious_imports) and total_symbols < 20:
-            self.__warnings.append(
-                'Imported symbols contain entries typical of packed executables.' )
+        if not dllnames_only:
+            suspicious_imports = set([ b'LoadLibrary', b'GetProcAddress' ])
+            suspicious_imports_count = 0
+            total_symbols = 0
+            for imp_dll in import_descs:
+                for symbol in imp_dll.imports:
+                    for suspicious_symbol in suspicious_imports:
+                        if symbol and symbol.name and symbol.name.startswith( suspicious_symbol ):
+                            suspicious_imports_count += 1
+                            break
+                    total_symbols += 1
+            if suspicious_imports_count == len(suspicious_imports) and total_symbols < 20:
+                self.__warnings.append(
+                    'Imported symbols contain entries typical of packed executables.' )
 
         return import_descs
 
@@ -4198,18 +4222,34 @@ class PE(object):
             data = self.get_data(rva, 2)
         except PEFormatError as e:
             return None
+        # max_length is the maximum count of 16bit characters
+        # needs to be doubled to get size in bytes
+        max_length <<= 1
 
-        s = u''
-        for idx in range(max_length):
-            data = self.get_data(rva+2*idx, 2)
-            try:
-                uchr = struct.unpack(b'<H', data)[0]
-            except struct.error:
+        requested = min(max_length, 256)
+        data = self.get_data(rva, requested)
+        # try to find null-termination
+        null_index = -1
+        while True:
+            null_index = data.find(b'\x00\x00', null_index + 1)
+            if null_index == -1:
+                data_length = len(data)
+                if data_length < requested or data_length == max_length:
+                    null_index = len(data) >> 1
+                    break
+                else:
+                    # Request remaining part of data limited by max_length
+                    data += self.get_data(rva + data_length, max_length - data_length)
+                    null_index = requested - 1
+                    requested = max_length
+
+            elif null_index % 2 == 0:
+                null_index >>= 1
                 break
 
-            if uchr == 0:
-                break
-            s += chr(uchr)
+        # convert selected part of the string to unicode
+        uchrs = struct.unpack('<{:d}H'.format(null_index), data[:null_index * 2])
+        s = u''.join(map(chr, uchrs))
 
         return s.encode('ascii', 'backslashreplace')
 
@@ -5233,21 +5273,32 @@ class PE(object):
 
         # This is not reliable either...
         #
-        # if any( (section.Characteristics & SECTION_CHARACTERISTICS['IMAGE_SCN_MEM_NOT_PAGED']) for section in self.sections ):
+        # if any((section.Characteristics &
+        #           SECTION_CHARACTERISTICS['IMAGE_SCN_MEM_NOT_PAGED']) for
+        #        section in self.sections ):
         #    return True
 
-        if hasattr(self, 'DIRECTORY_ENTRY_IMPORT'):
+        # If the import directory was not parsed (fast_load = True); do it now.
+        if not hasattr(self, 'DIRECTORY_ENTRY_IMPORT'):
+            self.parse_data_directories(directories=[
+                DIRECTORY_ENTRY['IMAGE_DIRECTORY_ENTRY_IMPORT']])
 
-            # If it imports from "ntoskrnl.exe" or other kernel components it should be a driver
-            #
-            if set( ('ntoskrnl.exe', 'hal.dll', 'ndis.sys', 'bootvid.dll', 'kdcom.dll' ) ).intersection( [ imp.dll.lower() for imp in self.DIRECTORY_ENTRY_IMPORT ] ):
-                return True
+        # self.DIRECTORY_ENTRY_IMPORT will now exist, although it may be empty.
+        # If it imports from "ntoskrnl.exe" or other kernel components it should
+        # be a driver
+        #
+        system_DLLs = set(
+            ('ntoskrnl.exe', 'hal.dll', 'ndis.sys', 'bootvid.dll', 'kdcom.dll'))
+        if system_DLLs.intersection(
+                [imp.dll.lower() for imp in self.DIRECTORY_ENTRY_IMPORT]):
+            return True
 
         return False
 
 
     def get_overlay_data_start_offset(self):
-        """Get the offset of data appended to the file and not contained within the area described in the headers."""
+        """Get the offset of data appended to the file and not contained within
+        the area described in the headers."""
 
         largest_offset_and_size = (0, 0)
 

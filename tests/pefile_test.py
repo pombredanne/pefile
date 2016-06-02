@@ -149,8 +149,34 @@ class Test_pefile(unittest.TestCase):
         self.assertEqual(pe_full.dump_info(), pe.dump_info())
 
 
+    def test_imphash(self):
+        """Test imphash values."""
+
+        self.assertEqual(
+            pefile.PE(os.path.join(
+                REGRESSION_TESTS_DIR, 'mfc40.dll')).get_imphash(),
+            'ef3d32741141a9ffde06721c65ea07b6')
+
+        self.assertEqual(
+            pefile.PE(os.path.join(
+                REGRESSION_TESTS_DIR, 'kernel32.dll')).get_imphash(),
+            '239b8e3d4f9d1860d6ce5efb07b02e2a')
+
+        self.assertEqual(
+            pefile.PE(os.path.join(
+                REGRESSION_TESTS_DIR,
+                '66c74e4c9dbd1d33b22f63cd0318b72dea88f9dbb4d36a3383d3da20b037d42e'
+                )).get_imphash(),
+            'a781de574e0567285ee1233bf6a57cc0')
+
+        self.assertEqual(
+            pefile.PE(os.path.join(
+                REGRESSION_TESTS_DIR, '64bit_Binaries/cmd.exe')).get_imphash(),
+            'd0058544e4588b1b2290b7f4d830eb0a')
+
+
     def test_write_header_fields(self):
-        """Verify correct field data modification"""
+        """Verify correct field data modification."""
 
         # Test version information writing
         control_file = os.path.join(REGRESSION_TESTS_DIR, 'MSVBVM60.DLL')
@@ -406,6 +432,20 @@ class Test_pefile(unittest.TestCase):
         control_file_pe = os.path.join(
             REGRESSION_TESTS_DIR, 'fake_PE_no_read_permissions_issue_53')
         self.assertRaises( Exception, pefile.PE, control_file_pe )
+
+
+    def test_driver_check(self):
+        """Test the is_driver check"""
+
+        control_file_pe = os.path.join(
+            REGRESSION_TESTS_DIR,
+            '075356de51afac92d1c20ba53c966fa145172897a96cfdb1b3bb369edb376a77_driver')
+
+        pe_fast = pefile.PE(control_file_pe, fast_load=True)
+        pe_full = pefile.PE(control_file_pe, fast_load=False)
+
+        # Ensure the rebased image is the same as the pre-generated one.
+        self.assertEqual( pe_fast.is_driver(), pe_full.is_driver() )
 
 
     def test_rebased_image(self):
