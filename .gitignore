@@ -4,6 +4,7 @@
 *.bak
 .coverage
 tests/test_files/*
+venv*
 
 # Back-up files
 *~
@@ -19,3 +20,8 @@ tests/test_files/*
 /build
 /dist
 /pefile.egg-info
+.DS_Store
+pefile.code-workspace
+.vscode/*
+pefile.ipynb
+.ipynb_checkpoints/*
